@@ -290,12 +290,10 @@ class WorkerThread(threading.Thread):
 
 
 class LoadHeader:
-    # def __init__(self, worker_uuid, request_type, queue_size, rlb_queues=None):
     def __init__(self, uuid, request_type, queue_size):
         self.uuid = uuid
         self.request_type = request_type
         self.queue_size = queue_size
-        # self.rlb_queues = None
 
 
 if __name__ == '__main__':
@@ -316,33 +314,6 @@ if __name__ == '__main__':
             DEVICE_TABLE[rlb_uuid].add_worker(qm_uuid)
 
     logging.info('[DEVICE_TABLE=%s]' % str(DEVICE_TABLE))
-    # DEVICE_TABLE[2] = ToRLoadBalancer(2, [], DEVICE_TABLE[1].uuid)
-    # DEVICE_TABLE[3] = QueueManager(3, DEVICE_TABLE[2].uuid)
-    # DEVICE_TABLE[4] = QueueManager(4, DEVICE_TABLE[2].uuid)
-    # DEVICE_TABLE[3] = QueueManager(5, DEVICE_TABLE[2].uuid)
-    # DEVICE_TABLE[4] = QueueManager(6, DEVICE_TABLE[2].uuid)
-    # DEVICE_TABLE[2].add_worker(DEVICE_TABLE[3].uuid)
-    # DEVICE_TABLE[2].add_worker(DEVICE_TABLE[4].uuid)
-    # DEVICE_TABLE[2].add_worker(DEVICE_TABLE[5].uuid)
-    # DEVICE_TABLE[2].add_worker(DEVICE_TABLE[6].uuid)
-    # DEVICE_TABLE[2].set_network_load_balancer(DEVICE_TABLE[1].uuid)
-    #
-    # DEVICE_TABLE[5] = ToRLoadBalancer(5, [], DEVICE_TABLE[1].uuid)
-    # DEVICE_TABLE[6] = QueueManager(6, DEVICE_TABLE[5].uuid)
-    # DEVICE_TABLE[7] = QueueManager(7, DEVICE_TABLE[5].uuid)
-    #
-    #
-    #
-    # DEVICE_TABLE[5].add_worker(DEVICE_TABLE[6].uuid)
-    # DEVICE_TABLE[5].add_worker(DEVICE_TABLE[7].uuid)
-    # DEVICE_TABLE[5].set_network_load_balancer(DEVICE_TABLE[1].uuid)
-    #
-    # DEVICE_TABLE[1].add_rack_load_balancer(DEVICE_TABLE[2].uuid)
-    # DEVICE_TABLE[1].add_rack_load_balancer(DEVICE_TABLE[5].uuid)
-
-    # nlbs = [DEVICE_TABLE[1]]
-    # rlbs = [DEVICE_TABLE[2]]
-    # qms = [DEVICE_TABLE[3], DEVICE_TABLE[4]]
 
     time.sleep(4)
 
@@ -366,36 +337,3 @@ if __name__ == '__main__':
     plt.ylabel("Queue Size")
     plt.legend()
     plt.show()
-
-    # line 1 points
-    # x1 = [1, 2, 3]
-    # y1 = [2, 4, 1]
-    # # plotting the line 1 points
-    # plt.plot(x1, y1, label="line 1")
-    #
-    # # line 2 points
-    # x2 = [1, 2, 3]
-    # y2 = [4, 1, 3]
-    # # plotting the line 2 points
-    # plt.plot(x2, y2, label="line 2")
-    #
-    # # naming the x axis
-    # plt.xlabel('x - axis')
-    # # naming the y axis
-    # plt.ylabel('y - axis')
-    # # giving a title to my graph
-    # plt.title('Two lines on same graph!')
-    #
-    # # show a legend on the plot
-    # plt.legend()
-    #
-    # # function to show the plot
-    # plt.show()
-    
-    # p = ProducerThread(name='producer')
-    # c = ConsumerThread(name='consumer')
-    #
-    # p.start()
-    # time.sleep(2)
-    # c.start()
-    # time.sleep(2)
