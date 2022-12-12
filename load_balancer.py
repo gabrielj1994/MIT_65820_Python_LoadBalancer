@@ -70,6 +70,7 @@ MESSAGE_TYPES = {'NLB': {'route_request', 'route_response'},
 '''
 class QueueManager:
     def __init__(self, uuid, load_balancer_uuid):
+        self.queue_lock = threading.Lock()
         self.uuid = uuid
         # self.listener = ConsumerThread(name="qm_listener_" + str(self.uuid))
         self.queue = deque(maxlen=BUF_SIZE)
@@ -84,49 +85,62 @@ class QueueManager:
     def get_work(self):
         # Validations
         # NOTE: Check if queue empty
-        if len(self.queue) == 0:
-            # NOTE: Request work steal async. Should not block, and just return no-op
-            # (or a callback of some kind to notify when queue non-empty)
-            if self.request_work_steal() is None:
-                return None
-        else:
-            logging.info('QueueManager get_work op [uuid=%s, queue_size=%d]' % (str(self.uuid), len(self.queue)))
+        with self.queue_lock:
+            # TODO: remove me, no work stealing
+            # if len(self.queue) == 0:
+            #     return None
+            if len(self.queue) <= 2:
+                # NOTE: Request work steal async. Should not block, and just return no-op
+                # (or a callback of some kind to notify when queue non-empty)
+                req = self.request_work_steal()
+                if req is None:
+                    if len(self.queue) == 0:
+                        return None
+                else:
+                    # self.put_work(req)
+                    self.queue.append(req)
+    # #%            logging.info('QueueManager get_work op [uuid=%s, queue_size=%d]' % (str(self.uuid), len(self.queue)))
             self.queue.popleft()
         # NOTE: Prepare LoadHeader
         # rlb_uuid = DEVICE_TABLE[self.worker_uuid].load_balancer_uuid
         request_type = list(REQUEST_EXECUTION_MS.keys())[
             random.randint(0, len(REQUEST_EXECUTION_MS.keys()) - 1)]
         execution_time_ms = REQUEST_EXECUTION_MS[request_type]
+        timestamp = (time.time_ns() / 1000000.0) - start_timestamp
+        # if (15000 > timestamp > 10000 or timestamp > 23000) and (self.uuid == 4 or self.uuid == 8 or self.uuid == 14):
+        #     execution_time_ms = 50
         header = LoadHeader(self.uuid, request_type, len(self.queue))
         DEVICE_TABLE[self.load_balancer_uuid].route_response(header)
-        time.sleep(execution_time_ms)
+        time.sleep(execution_time_ms/1000.0)
         # return execution_time_ms
         # GRAPH_DATA[str(self.load_balancer_uuid) + "-" + str(self.uuid)][0].append((time.time_ns()/1000000.0) - start_timestamp)
         # GRAPH_DATA[str(self.load_balancer_uuid) + "-" + str(self.uuid)][1].append(len(self.queue))
 
     def put_work(self, req):
-        logging.info('QueueManager put_work op [uuid=%s, queue_size=%d]' % (str(self.uuid), len(self.queue)))
+#%        logging.info('QueueManager put_work op [uuid=%s, queue_size=%d]' % (str(self.uuid), len(self.queue)))
         if len(self.queue) == self.queue.maxlen:
             # NOTE: should not occur
             # TODO: Reply with error message with full queue code
             return None
         self.queue.append(req)
-        GRAPH_DATA[str(self.load_balancer_uuid) + "-" + str(self.uuid)][0].append((time.time_ns() / 1000000.0) - start_timestamp)
-        GRAPH_DATA[str(self.load_balancer_uuid) + "-" + str(self.uuid)][1].append(len(self.queue))
+        GRAPH_DATA["lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" + str(self.uuid)][0].append(
+                                                                        (time.time_ns() / 1000000.0) - start_timestamp)
+        GRAPH_DATA["lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" + str(self.uuid)][1].append(len(self.queue))
 
     def steal_work(self):
         # Validations
         # NOTE: Check if queue empty
-        if len(self.queue) <= 2:
-            # NOTE: work-steal request comes from load-balancer, if queue empty,
-            # load balancer must be informed to steal from another worker. Impact is bounded, since load-balancer should
-            # have picked the worker with the longest queue. If longest queue worker is suddenly empty, then likely
-            # many available workers are idle, and the network is simply under light load
-            return None
-        # TODO: locking the queue when popping from it
-        # Offer no schedule ordering guarantees.
-        logging.info('QueueManager steal_work op [uuid=%s, queue_size=%d]' % (str(self.uuid), len(self.queue)))
-        return self.queue.popleft()
+        with self.queue_lock:
+            if len(self.queue) <= 2:
+                # NOTE: work-steal request comes from load-balancer, if queue empty,
+                # load balancer must be informed to steal from another worker. Impact is bounded, since load-balancer should
+                # have picked the worker with the longest queue. If longest queue worker is suddenly empty, then likely
+                # many available workers are idle, and the network is simply under light load
+                return None
+            # TODO: locking the queue when popping from it
+            # Offer no schedule ordering guarantees.
+    #%        logging.info('QueueManager steal_work op [uuid=%s, queue_size=%d]' % (str(self.uuid), len(self.queue)))
+            return self.queue.popleft()
 
     def request_work_steal(self):
         # NOTE: this should be async, and "callback" is effectively treated as simply a new request arriving
@@ -139,7 +153,7 @@ class QueueManager:
 
 # def process_request_queue(request_queue, request_queue_lock, uuid):
 def process_request_queue(nlb):
-    print("Inside executor", flush=True)
+#%    print("Inside executor", flush=True)
     return
     # while True:
     #     # self.queue_lock.acquire()
@@ -167,6 +181,138 @@ def process_request_queue(nlb):
     #     # self.queue_lock.release()
     # print("Finishing executor", flush=True)
 
+#
+# class JIQNLB:
+#     def __init__(self, uuid, workers=None, network_load_balancer_uuid=None):
+#         self.uuid = uuid
+#         self.request_queue = Queue()
+#         self.request_queue_lock = threading.Lock()
+#         self.response_queue = Queue()
+#         self.response_queue_lock = threading.Lock()
+#         self.queue_locks = {}
+#         self.queue_loads_workers = {}
+#         self.current_load = 0
+#         self.atomic_lock = threading.Lock()
+#         if workers is not None:
+#             for uuid in workers:
+#                 self.queue_loads_workers[uuid] = 0
+#                 self.queue_locks[uuid] = threading.Lock()
+#                 # "lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" +
+#                 GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(uuid)] = [[0], [0]]
+#         self.nlb_uuid = network_load_balancer_uuid
+#         self.work_steal_threshold = 3
+#         self.steal_candidates = {}
+#         self.lb_candidates = {}
+#         # self.request_thread = ToRLoadBalancer.RLBThread(queue=self.request_queue, queue_lock=self.request_queue_lock,
+#         #                                                 uuid=self.uuid, name="rlb_request_thread_" + str(uuid))
+#         # self.request_thread.start()
+#         # self.response_thread = ToRLoadBalancer.RLBThread(queue=self.response_queue, queue_lock=self.response_queue_lock,
+#         #                                                  uuid=self.uuid, name="rlb_response_thread_" + str(uuid))
+#         # self.response_thread.start()
+#
+#     def route_request_enqueue(self, req):
+#         item = {'request_type': 'route_request', 'args': [req]}
+#         self.request_queue.put(item)
+#
+#     def route_request(self, req):
+#         #%        logging.info('ToRLoadBalancer route_request op [uuid=%s, load=%d]' % (str(self.uuid), self.current_load))
+#         with self.atomic_lock:
+#             self.current_load += 1
+#         # return self.route_request_random(req)
+#         return self.route_request_jiq(req)
+#
+#     def route_request_jiq(self, req):
+#
+#     def route_request_random(self, req):
+#         # NOTE: random algorithm
+#         index = random.randint(0, len(self.queue_loads_workers.keys()) - 1)
+#         return DEVICE_TABLE[list(self.queue_loads_workers.keys())[index]].put_work(req)
+#
+#     def route_request_sq(self, req):
+#         # NOTE: route to a short queue
+#         # Sort current load sizes
+#         sorted_loads = sorted(self.queue_loads_workers.items(), key=lambda x: x[1], reverse=False)
+#         # TODO: remove print
+#         #%        logging.info('ToRLoadBalancer route_request_sq op [sorted_loads=%s]' % (str(sorted_loads)))
+#         # TODO: track in-flight requests
+#         self.increment_queue(sorted_loads[0][0])
+#         return DEVICE_TABLE[sorted_loads[0][0]].put_work(req)
+#
+#     def work_steal_request(self, source_uuid):
+#         if len(self.steal_candidates) > 0:
+#             sorted_loads = sorted(self.steal_candidates.items(), key=lambda x: x[1])
+#             timestamp = (time.time_ns() / 1000000.0) - start_timestamp
+#             logging.info('ToRLoadBalancer work_steal_request op [sorted_loads=%s, source_uuid=%s, timestamp=%d]'
+#                          % (str(sorted_loads), source_uuid, timestamp))
+#             self.decrement_queue(sorted_loads[0][0])
+#             self.increment_queue(source_uuid)
+#             return DEVICE_TABLE[sorted_loads[0][0]].steal_work()
+#         else:
+#             return None
+#
+#     def route_response_enqueue(self, load_header):
+#         item = {'request_type': 'route_response', 'args': [load_header]}
+#         self.response_queue.put(item)
+#
+#     def route_response(self, load_header):
+#         with self.atomic_lock:
+#             self.current_load -= 1
+#         self.update_network_load_state(load_header.uuid, load_header.queue_size)
+#         #%        logging.info('ToRLoadBalancer route_response op [uuid=%s, load=%d]' % (str(self.uuid), self.current_load))
+#         # "lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" +
+#         GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(load_header.uuid)][0].append(
+#             (time.time_ns() / 1000000.0) - start_timestamp)
+#         GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(load_header.uuid)][1].append(
+#             self.queue_loads_workers[load_header.uuid])
+#         load_header.queue_size = self.current_load
+#         load_header.uuid = self.uuid
+#         DEVICE_TABLE[self.nlb_uuid].route_response(load_header)
+#         # TODO: Fix waterfalling of route response messages
+#         # DEVICE_TABLE[self.nlb_uuid].route_response_enqueue(load_header)
+#
+#     def increment_queue(self, uuid):
+#         # TODO: improve locking, this is too restrictive, should be just on uuid
+#         with self.queue_locks[uuid]:
+#             self.queue_loads_workers[uuid] += 1
+#             if self.queue_loads_workers[uuid] >= self.work_steal_threshold \
+#                     and (uuid in self.steal_candidates.keys() or len(self.steal_candidates) < 3):
+#                 self.steal_candidates[uuid] = self.queue_loads_workers[uuid]
+#
+#     def decrement_queue(self, uuid):
+#         # TODO: improve locking, this is too restrictive, should be just on uuid
+#         with self.queue_locks[uuid]:
+#             self.queue_loads_workers[uuid] -= 1
+#             if uuid in self.steal_candidates.keys():
+#                 #%                logging.info('ToRLoadBalancer decrement_queue op [steal_candidates=%s]'
+#                              #% % (str(list(self.steal_candidates.items()))))
+#                 if self.queue_loads_workers[uuid] < self.work_steal_threshold:
+#                     self.steal_candidates.pop(uuid)
+#                 else:
+#                     self.steal_candidates[uuid] = self.queue_loads_workers[uuid]
+#
+#     def update_network_load_state(self, worker_uuid, queue_size):
+#         with self.queue_locks[worker_uuid]:
+#             self.queue_loads_workers[worker_uuid] = queue_size
+#             if worker_uuid in self.steal_candidates.keys():
+#                 # logging.info('ToRLoadBalancer update_network_load_state op [steal_candidates=%s]'
+#                 #              % (str(list(self.steal_candidates.items()))))
+#                 if self.queue_loads_workers[worker_uuid] < self.work_steal_threshold:
+#                     self.steal_candidates.pop(worker_uuid)
+#                 else:
+#                     self.steal_candidates[worker_uuid] = self.queue_loads_workers[worker_uuid]
+#
+#     def heartbeat(self):
+#         pass
+#
+#     def add_worker(self, worker_uuid, queue_load=0):
+#         self.queue_loads_workers[worker_uuid] = queue_load
+#         self.queue_locks[worker_uuid] = threading.Lock()
+#         # "lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" +
+#
+#         GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(worker_uuid)] = [[0], [0]]
+#
+#     def set_network_load_balancer(self, nlb_uuid):
+#         self.nlb_uuid = nlb_uuid
 
 class NetworkLoadBalancer:
     def __init__(self, uuid, rack_load_balancers=None, network_load_balancers=None):
@@ -225,17 +371,17 @@ class NetworkLoadBalancer:
 
     def prepare_process_executors(self):
         executor = ProcessPoolExecutor(max_workers=1)
-        print("Starting executor", flush=True)
+#%        print("Starting executor", flush=True)
         # executor.submit(process_request_queue, self.request_queue, self.request_queue_lock, self.uuid)
         executor.submit(process_request_queue, self)
 
     def route_request_enqueue(self, req):
         item = {'request_type': 'route_request', 'args': [req]}
-        logging.info('NetworkLoadBalancer route_request op [uuid=%s]' % (str(self.uuid)))
+        #%        logging.info('NetworkLoadBalancer route_request op [uuid=%s]' % (str(self.uuid)))
         self.request_queue.put(item)
 
     def route_request(self, req):
-        logging.info('NetworkLoadBalancer route_request op [uuid=%s]' % (str(self.uuid)))
+        #%        logging.info('NetworkLoadBalancer route_request op [uuid=%s]' % (str(self.uuid)))
         # return self.route_request_random(req)
         return self.route_request_sq(req)
 
@@ -250,7 +396,7 @@ class NetworkLoadBalancer:
         # Sort current load sizes
         sorted_loads = sorted(self.queue_loads_rlb.items(), key=lambda x: x[1], reverse=False)
         # TODO: remove print
-        logging.info('NetworkLoadBalancer route_request_sq op [sorted_loads=%s]' % (str(sorted_loads)))
+        #%        logging.info('NetworkLoadBalancer route_request_sq op [sorted_loads=%s]' % (str(sorted_loads)))
         # TODO: track in-flight requests
         self.increment_queue(sorted_loads[0][0])
         return DEVICE_TABLE[sorted_loads[0][0]].route_request(req)
@@ -306,8 +452,8 @@ class NetworkLoadBalancer:
                     queue_size = self.queue.qsize()
                     # self.queue_lock.release()
                     # acquired_lock = False
-                    logging.debug('Getting ' + str(item)
-                                  + ' : ' + str(queue_size) + ' items in queue')
+                    #%logging.debug('Getting ' + str(item)
+                    #               + ' : ' + str(queue_size) + ' items in queue')
 
                     if item['request_type'] not in MESSAGE_TYPES['NLB']:
                         # ERROR: Invalid request type
@@ -338,7 +484,8 @@ class ToRLoadBalancer:
             for uuid in workers:
                 self.queue_loads_workers[uuid] = 0
                 self.queue_locks[uuid] = threading.Lock()
-                GRAPH_DATA[str(self.uuid) + "-" + str(uuid)] = [[0], [0]]
+                # "lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" +
+                GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(uuid)] = [[0], [0]]
         self.nlb_uuid = network_load_balancer_uuid
         self.work_steal_threshold = 3
         self.steal_candidates = {}
@@ -355,7 +502,7 @@ class ToRLoadBalancer:
         self.request_queue.put(item)
 
     def route_request(self, req):
-        logging.info('ToRLoadBalancer route_request op [uuid=%s, load=%d]' % (str(self.uuid), self.current_load))
+        #%        logging.info('ToRLoadBalancer route_request op [uuid=%s, load=%d]' % (str(self.uuid), self.current_load))
         with self.atomic_lock:
             self.current_load += 1
         # return self.route_request_random(req)
@@ -363,26 +510,46 @@ class ToRLoadBalancer:
 
     def route_request_random(self, req):
         # NOTE: random algorithm
-        index = random.randint(0, len(self.queue_loads_workers.keys()) - 1)
-        return DEVICE_TABLE[list(self.queue_loads_workers.keys())[index]].put_work(req)
+        sorted_loads = sorted(self.queue_loads_workers.items(), key=lambda x: x[1], reverse=False)
+        # index = random.randint(0, len(self.queue_loads_workers.keys()) - 1)
+        # return DEVICE_TABLE[list(self.queue_loads_workers.keys())[index]].put_work(req)
+        index = random.randint(0, len(self.queue_loads_workers.keys()) - 2)
+        if index == 0:
+            random_var = random.randint(0, 9)
+            if random_var < 3:
+                index += 2
+        self.increment_queue(sorted_loads[index][0])
+        return DEVICE_TABLE[sorted_loads[index][0]].put_work(req)
+
 
     def route_request_sq(self, req):
         # NOTE: route to a short queue
         # Sort current load sizes
         sorted_loads = sorted(self.queue_loads_workers.items(), key=lambda x: x[1], reverse=False)
         # TODO: remove print
-        logging.info('ToRLoadBalancer route_request_sq op [sorted_loads=%s]' % (str(sorted_loads)))
+        #%        logging.info('ToRLoadBalancer route_request_sq op [sorted_loads=%s]' % (str(sorted_loads)))
         # TODO: track in-flight requests
         self.increment_queue(sorted_loads[0][0])
         return DEVICE_TABLE[sorted_loads[0][0]].put_work(req)
 
     def work_steal_request(self, source_uuid):
+        # TODO: remove me. jiq test
+        # return None
         if len(self.steal_candidates) > 0:
-            sorted_loads = sorted(self.steal_candidates.items(), key=lambda x: x[1])
-            logging.info('ToRLoadBalancer work_steal_request op [sorted_loads=%s, source_uuid=%s]'
-                         % (str(sorted_loads), source_uuid))
+            sorted_loads = sorted(self.queue_loads_workers.items(), key=lambda x: x[1], reverse=True)
+            timestamp = (time.time_ns() / 1000000.0) - start_timestamp
+            logging.info('ToRLoadBalancer work_steal_request op [sorted_loads=%s, source_uuid=%s, timestamp=%d]'
+                         % (str(sorted_loads), source_uuid, timestamp))
             self.decrement_queue(sorted_loads[0][0])
+            GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(sorted_loads[0][0])][0].append(
+                timestamp)
+            GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(sorted_loads[0][0])][1].append(
+                self.queue_loads_workers[sorted_loads[0][0]])
             self.increment_queue(source_uuid)
+            GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(source_uuid)][0].append(
+                timestamp)
+            GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(source_uuid)][1].append(
+                self.queue_loads_workers[source_uuid])
             return DEVICE_TABLE[sorted_loads[0][0]].steal_work()
         else:
             return None
@@ -395,10 +562,11 @@ class ToRLoadBalancer:
         with self.atomic_lock:
             self.current_load -= 1
         self.update_network_load_state(load_header.uuid, load_header.queue_size)
-        logging.info('ToRLoadBalancer route_response op [uuid=%s, load=%d]' % (str(self.uuid), self.current_load))
-        GRAPH_DATA[str(self.uuid) + "-" + str(load_header.uuid)][0].append(
+        #%        logging.info('ToRLoadBalancer route_response op [uuid=%s, load=%d]' % (str(self.uuid), self.current_load))
+        # "lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" +
+        GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(load_header.uuid)][0].append(
             (time.time_ns() / 1000000.0) - start_timestamp)
-        GRAPH_DATA[str(self.uuid) + "-" + str(load_header.uuid)][1].append(
+        GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(load_header.uuid)][1].append(
             self.queue_loads_workers[load_header.uuid])
         load_header.queue_size = self.current_load
         load_header.uuid = self.uuid
@@ -410,8 +578,7 @@ class ToRLoadBalancer:
         # TODO: improve locking, this is too restrictive, should be just on uuid
         with self.queue_locks[uuid]:
             self.queue_loads_workers[uuid] += 1
-            if self.queue_loads_workers[uuid] >= self.work_steal_threshold \
-                    and (uuid in self.steal_candidates.keys() or len(self.steal_candidates) < 3):
+            if self.queue_loads_workers[uuid] >= self.work_steal_threshold:
                 self.steal_candidates[uuid] = self.queue_loads_workers[uuid]
 
     def decrement_queue(self, uuid):
@@ -419,8 +586,8 @@ class ToRLoadBalancer:
         with self.queue_locks[uuid]:
             self.queue_loads_workers[uuid] -= 1
             if uuid in self.steal_candidates.keys():
-                logging.info('ToRLoadBalancer decrement_queue op [steal_candidates=%s]'
-                             % (str(list(self.steal_candidates.items()))))
+                #%                logging.info('ToRLoadBalancer decrement_queue op [steal_candidates=%s]'
+                             #% % (str(list(self.steal_candidates.items()))))
                 if self.queue_loads_workers[uuid] < self.work_steal_threshold:
                     self.steal_candidates.pop(uuid)
                 else:
@@ -443,7 +610,9 @@ class ToRLoadBalancer:
     def add_worker(self, worker_uuid, queue_load=0):
         self.queue_loads_workers[worker_uuid] = queue_load
         self.queue_locks[worker_uuid] = threading.Lock()
-        GRAPH_DATA[str(self.uuid) + "-" + str(worker_uuid)] = [[0], [0]]
+        # "lbid-" + str(self.load_balancer_uuid) + "-" + "wkid-" +
+
+        GRAPH_DATA["lbid-" + str(self.uuid) + "-" + "wkid-" + str(worker_uuid)] = [[0], [0]]
 
     def set_network_load_balancer(self, nlb_uuid):
         self.nlb_uuid = nlb_uuid
@@ -468,8 +637,8 @@ class ToRLoadBalancer:
                     queue_size = self.queue.qsize()
                     self.queue_lock.release()
                     acquired_lock = False
-                    logging.debug('Getting ' + str(item)
-                                  + ' : ' + str(queue_size) + ' items in queue')
+                    #% logging.debug('Getting ' + str(item)
+                    #               + ' : ' + str(queue_size) + ' items in queue')
 
                     if item['request_type'] not in MESSAGE_TYPES['NLB']:
                         # ERROR: Invalid request type
@@ -566,17 +735,21 @@ class RequestThread(threading.Thread):
 
     def run(self):
         count = 0
-        while count < 200:
+        while count < 250:
             count += 1
             request = "Dummy Request"
             # DEVICE_TABLE[nlb_uuid].route_request_enqueue(request)
             DEVICE_TABLE[nlb_uuid].route_request(request)
-            if count % 10 == 0:
-                if count > 50:
+            if count % 5 == 0:
+                if 120 > count > 50:
                     time.sleep(0.15)
+                elif 180 > count > 120:
+                    time.sleep(1)
+                elif count > 180:
+                    time.sleep(0.35)
                 else:
                     time.sleep(0.05)
-            if count % 75 == 0:
+            elif count % 100 == 0:
                 time.sleep(2.5)
 
 
@@ -677,12 +850,12 @@ if __name__ == '__main__':
     time.sleep(60)
     logging.info("[Graph_Data=%s]", str(GRAPH_DATA.items()))
     # NOTES: Graphs
-    # for line, data in GRAPH_DATA.items():
-    #     x = data[0]
-    #     y = data[1]
-    #     plt.plot(x, y, label=line)
-    #
-    # plt.xlabel("Timestamp")
-    # plt.ylabel("Queue Size")
-    # plt.legend()
-    # plt.show()
+    for line, data in GRAPH_DATA.items():
+        x = data[0]
+        y = data[1]
+        plt.plot(x, y, label=line)
+
+    plt.xlabel("Timestamp (ms from start time)")
+    plt.ylabel("Queue Size")
+    plt.legend(loc='upper right')
+    plt.show()
